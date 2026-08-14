@@ -759,6 +759,39 @@ SELECT * FROM t_gin_index_multiple_predicate_none WHERE text_column NOT match_an
 3	ABD
 4	This is Gin Index
 -- !result
+SELECT * FROM t_gin_index_multiple_predicate_none WHERE text_column NOT match_any "ABC" OR id1 = 100;
+-- result:
+1	ABC
+3	ABD
+4	This is Gin Index
+-- !result
+SELECT * FROM t_gin_index_multiple_predicate_none WHERE id1 = 100 OR text_column NOT match_any "ABC";
+-- result:
+1	ABC
+3	ABD
+4	This is Gin Index
+-- !result
+SELECT * FROM t_gin_index_multiple_predicate_none WHERE text_column NOT match_any "ABC" OR id1 = 5;
+-- result:
+1	ABC
+3	ABD
+4	This is Gin Index
+5	None
+-- !result
+SELECT * FROM t_gin_index_multiple_predicate_none WHERE text_column NOT match_any "";
+-- result:
+1	ABC
+2	abc
+3	ABD
+4	This is Gin Index
+-- !result
+SELECT * FROM t_gin_index_multiple_predicate_none WHERE text_column NOT match_any "" OR id1 = 100;
+-- result:
+1	ABC
+2	abc
+3	ABD
+4	This is Gin Index
+-- !result
 DROP TABLE t_gin_index_multiple_predicate_none;
 -- result:
 -- !result
@@ -2109,5 +2142,58 @@ SELECT id1 FROM t_gin_like_underscore WHERE text_column LIKE "abc" ORDER BY id1;
 1
 -- !result
 DROP TABLE t_gin_like_underscore;
+-- result:
+-- !result
+-- name: test_gin_or_prune_after_index_filter @native
+ADMIN SET FRONTEND CONFIG("enable_experimental_gin" = "true");
+-- result:
+-- !result
+CREATE TABLE `t_gin_or_prune_${uuid0}` (
+  `id` bigint NOT NULL,
+  `k`  bigint NOT NULL,
+  `v`  varchar(255) NOT NULL,
+  INDEX gin_v (`v`) USING GIN ("parser" = "none")
+) ENGINE=OLAP
+DUPLICATE KEY(`id`)
+DISTRIBUTED BY HASH(`id`) BUCKETS 1
+PROPERTIES ("replication_num" = "1", "replicated_storage" = "false");
+-- result:
+-- !result
+insert into t_gin_or_prune_${uuid0} values (1, 0, "redx"), (2, 1, "redy"), (3, 1, "blue"), (4, 0, "redz");
+-- result:
+-- !result
+select id from t_gin_or_prune_${uuid0} where v like '%red%' and (v = 'redx' or k = 1) order by id;
+-- result:
+1
+2
+-- !result
+select id from t_gin_or_prune_${uuid0} where v match '%red%' and (v = 'redx' or k = 1) order by id;
+-- result:
+1
+2
+-- !result
+set enable_prune_column_after_index_filter = false;
+-- result:
+-- !result
+select id from t_gin_or_prune_${uuid0} where v like '%red%' and (v = 'redx' or k = 1) order by id;
+-- result:
+1
+2
+-- !result
+set enable_prune_column_after_index_filter = true;
+-- result:
+-- !result
+select id, v from t_gin_or_prune_${uuid0} where v like '%red%' and (v = 'redx' or k = 1) order by id;
+-- result:
+1	redx
+2	redy
+-- !result
+select id from t_gin_or_prune_${uuid0} where v like '%red%' order by id;
+-- result:
+1
+2
+4
+-- !result
+DROP TABLE t_gin_or_prune_${uuid0};
 -- result:
 -- !result

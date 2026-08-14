@@ -192,6 +192,7 @@ option(WITH_STARCACHE "Build binary with starcache library" ${WITH_STARCACHE_DEF
 option(WITH_BRCP_KEEPALIVE "Build binary with brpc_socket_keepalive (requires brpc 1.8)" OFF)
 
 option(WITH_BENCH "Build binary with bench" OFF)
+option(WITH_GLIBC_COMPAT "Build starrocks_be with the glibc compatibility shim, so it runs on hosts with an older glibc than the build image's" OFF)
 option(WITH_CONNECTOR_BENCHMARK "Build the benchgen-backed benchmark connector" ON)
 option(WITH_CONNECTOR_ELASTICSEARCH "Build the Elasticsearch connector" ON)
 option(WITH_CONNECTOR_JDBC "Build the JDBC connector" ON)
@@ -540,6 +541,30 @@ endif()
 
 include(${SRC_DIR}/exprs_ext/extension_targets.cmake)
 
+# Concrete connectors reach the BE binary only as transitive PRIVATE deps of
+# ModuleBootstrap/Exec, which CMake places after the thirdparty group. List every
+# connector ModuleBootstrap pulls (guarded by the same options) ahead of it.
+set (DIRECT_CONNECTOR_LINK_LIBS
+    Connector
+    ConnectorLake
+    ConnectorFile
+    ConnectorHive
+    ConnectorIceberg
+    ConnectorCacheStats
+)
+if (WITH_CONNECTOR_BENCHMARK)
+    list(APPEND DIRECT_CONNECTOR_LINK_LIBS ConnectorBenchmark)
+endif()
+if (WITH_CONNECTOR_ELASTICSEARCH)
+    list(APPEND DIRECT_CONNECTOR_LINK_LIBS ConnectorElasticsearch)
+endif()
+if (WITH_CONNECTOR_JDBC)
+    list(APPEND DIRECT_CONNECTOR_LINK_LIBS ConnectorJDBC)
+endif()
+if (WITH_CONNECTOR_MYSQL)
+    list(APPEND DIRECT_CONNECTOR_LINK_LIBS ConnectorMySQL)
+endif()
+
 # Set starrocks libraries
 set(STARROCKS_LINK_LIBS
     HttpService
@@ -552,6 +577,22 @@ set(STARROCKS_LINK_LIBS
     ${WL_START_GROUP}
     Exec
     ${WL_WHOLE_ARCHIVE_PREFIX} ${EXPR_EXTENSION_LIBS} ${WL_WHOLE_ARCHIVE_SUFFIX}
+    ${WL_END_GROUP}
+    # Concrete data sinks are PRIVATE dependencies of Exec. Keep them in the
+    # main link list ahead of connectors, Storage, format, and thirdparty
+    # provider archives so one-pass static linkers see their unresolved
+    # references first.
+    DataSinkResult
+    DataSinkExchange
+    DataSinkExternal
+    DataSinkDictionaryCache
+    DataSinkTablet
+    DataSinkFile
+    # ConnectorLake depends on Storage, while connectors also depend on the
+    # format libs and thirdparty archives below; keep them ahead of those
+    # dependencies.
+    ${WL_START_GROUP}
+    ${DIRECT_CONNECTOR_LINK_LIBS}
     ${WL_END_GROUP}
     Storage
     # The concrete format libraries must be linked ahead of the thirdparty
@@ -876,17 +917,6 @@ if (WITH_GCOV)
     set(STARROCKS_LINK_LIBS ${STARROCKS_LINK_LIBS} --coverage)
 endif()
 
-# Broad test and benchmark executables directly exercise concrete connector implementations.
-# Keep these explicit: PRIVATE dependencies of shared BE modules are intentionally not propagated
-# when ENABLE_MULTI_DYNAMIC_LIBS is enabled.
-set (DIRECT_CONNECTOR_LINK_LIBS
-    Connector
-    ConnectorLake
-    ConnectorFile
-    ConnectorHive
-    ConnectorIceberg
-)
-
 # Set libraries for test. TestUtil is UT-only and intentionally stays out of
 # STARROCKS_LINK_LIBS so normal BE, format-lib, and benchmark builds do not
 # compile or link test helper code.
@@ -901,10 +931,12 @@ set (TEST_LINK_LIBS
     ${WL_END_GROUP}
 )
 
+# Several benches assert with gtest macros, so benchmarks need gtest just like tests do.
 set (BENCH_LINK_LIBS
     ${STARROCKS_LINK_LIBS}
     ${WL_START_GROUP}
     ${DIRECT_CONNECTOR_LINK_LIBS}
+    gtest
     ${WL_END_GROUP}
 )
 
@@ -996,7 +1028,9 @@ add_subdirectory(${SRC_DIR}/exec_primitive)
 add_subdirectory(${SRC_DIR}/connector_primitive)
 add_subdirectory(${SRC_DIR}/connector)
 add_subdirectory(${SRC_DIR}/module)
+add_subdirectory(${SRC_DIR}/data_sink)
 add_subdirectory(${SRC_DIR}/exec)
+add_subdirectory(${SRC_DIR}/schema_scanner)
 add_subdirectory(${SRC_DIR}/exprs)
 add_subdirectory(${SRC_DIR}/gen_cpp)
 add_subdirectory(${SRC_DIR}/geo)
