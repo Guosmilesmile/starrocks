@@ -709,4 +709,37 @@ public class PartitionBasedMvRefreshProcessorIcebergTest extends MVTestBase {
 
         starRocksAssert.dropMaterializedView(mvName);
     }
+
+    @Test
+    public void testRefreshMvWithIcebergPartitionEvolutionAllowedByConfig() throws Exception {
+        // With the switch on, and since the mocked evolution table's currentSnapshot() is null,
+        // isCurrentSnapshotAllOnCurrentSpec() returns true. Creating a partitioned MV and refreshing it
+        // should both succeed even though the base iceberg table has multiple partition specs in metadata.
+        boolean originalConfig = Config.enable_mv_on_iceberg_table_with_partition_evolution;
+        Config.enable_mv_on_iceberg_table_with_partition_evolution = true;
+        String mvName = "iceberg_refresh_evolution_partitioned_mv_allowed";
+        try {
+            starRocksAssert.useDatabase("test")
+                    .withMaterializedView("CREATE MATERIALIZED VIEW `test`.`" + mvName + "`\n" +
+                            "PARTITION BY date_trunc('month', ts)\n" +
+                            "DISTRIBUTED BY HASH(`id`) BUCKETS 10\n" +
+                            "REFRESH DEFERRED MANUAL\n" +
+                            "PROPERTIES (\n" +
+                            "\"replication_num\" = \"1\"\n" +
+                            ")\n" +
+                            "AS SELECT id, data, ts FROM `iceberg0`.`partitioned_transforms_db`."
+                            + "`t0_date_month_identity_evolution` as a;");
+
+            Database testDb = GlobalStateMgr.getCurrentState().getLocalMetastore().getDb("test");
+            MaterializedView mv = ((MaterializedView) GlobalStateMgr.getCurrentState().getLocalMetastore()
+                    .getTable(testDb.getFullName(), mvName));
+            Assertions.assertNotNull(mv);
+            // Trigger refresh - should not throw partition-evolution error since all live manifests
+            // are on the current spec (in fact there is no snapshot at all in the mocked table).
+            triggerRefreshMv(testDb, mv);
+            starRocksAssert.dropMaterializedView(mvName);
+        } finally {
+            Config.enable_mv_on_iceberg_table_with_partition_evolution = originalConfig;
+        }
+    }
 }

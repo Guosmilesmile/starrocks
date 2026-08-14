@@ -624,6 +624,34 @@ public class MaterializedViewAnalyzerTest {
     }
 
     @Test
+    public void testCreateMvOnIcebergTableWithPartitionEvolutionAllowedByConfig() throws Exception {
+        // With the new switch on, and since the mocked evolution table has no data (currentSnapshot() is null,
+        // so isCurrentSnapshotAllOnCurrentSpec() returns true), creating a partitioned MV on top of the
+        // partition-evolved iceberg table should succeed.
+        boolean originalConfig = Config.enable_mv_on_iceberg_table_with_partition_evolution;
+        Config.enable_mv_on_iceberg_table_with_partition_evolution = true;
+        String partitionedMvName = "iceberg_evolution_partitioned_mv_allowed";
+        try {
+            starRocksAssert.useDatabase("test")
+                    .withMaterializedView("CREATE MATERIALIZED VIEW `test`.`" + partitionedMvName + "`\n" +
+                            "COMMENT \"MATERIALIZED_VIEW\"\n" +
+                            "PARTITION BY date_trunc('month', ts)\n" +
+                            "DISTRIBUTED BY HASH(`id`) BUCKETS 10\n" +
+                            "REFRESH DEFERRED MANUAL\n" +
+                            "PROPERTIES (\n" +
+                            "\"replication_num\" = \"1\"\n" +
+                            ")\n" +
+                            "AS SELECT id, data, ts FROM `iceberg0`.`partitioned_transforms_db`."
+                            + "`t0_date_month_identity_evolution` as a;");
+            Table mv = starRocksAssert.getTable("test", partitionedMvName);
+            Assertions.assertTrue(mv instanceof MaterializedView);
+            starRocksAssert.dropMaterializedView(partitionedMvName);
+        } finally {
+            Config.enable_mv_on_iceberg_table_with_partition_evolution = originalConfig;
+        }
+    }
+
+    @Test
     public void testCreateMvOnIcebergView() {
         // Test creating MV on IcebergView should fail
         String sql = "create materialized view mv_on_iceberg_view refresh manual as " +
